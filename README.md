@@ -1,4 +1,4 @@
-#QRunner 0.1
+# QRunner 0.1
 
 A simple task runner based on Python which will run multiple commands
 in different processes, and track the results in a simple CSV file.
