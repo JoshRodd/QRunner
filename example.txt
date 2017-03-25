@@ -1,0 +1,25 @@
+$ time ./example.sh
+Example of how to use QRunner:
+Going to probe 1,016 IP addresses on 10.20.48/22
+The command is: ping -c 1 -t 1 10.20.c.d
+Generating list... done. Number of lines: 1016 tasks.csv
+The CSV file looks like this:
+TASK_10.20.48.1,NEW,,,ping -c 1 -t 1 10.20.48.1,,,,demo
+TASK_10.20.48.2,NEW,,,ping -c 1 -t 1 10.20.48.2,,,,demo
+100%    done.
+QRunner is done. Now going to grep for any successful pings. Showing first 10 lines:
+10.20.48.11: time=1.501
+10.20.48.13: time=1.340
+10.20.48.21: time=1.252
+10.20.48.22: time=1.251
+10.20.50.10: time=1.477
+10.20.50.101: time=1.316
+10.20.50.103: time=1.293
+10.20.50.106: time=1.276
+10.20.50.11: time=1.004
+10.20.50.169: time=1.575
+
+real	0m19.973s
+user	0m10.737s
+sys	0m6.573s
+$
