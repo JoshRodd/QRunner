@@ -73,6 +73,7 @@ DEFAULT_TASKS_FILE_TEXT = '''\
 '''
 
 ROWNUM_KEY = 'rownum'
+FUNCTION_KEY = 'function'
 
 class QRunnerTasksDatabase:
 
@@ -82,6 +83,7 @@ class QRunnerTasksDatabase:
                             ]
 
         self.rawdata = []
+        self.rawdata_len = 0
 
         if self.tasksdb_text is None:
             self.preservetext = DEFAULT_TASKS_FILE_TEXT
@@ -112,22 +114,9 @@ class QRunnerTasksDatabase:
                 csvs_to_add = csv.DictReader(csvs, dialect='unix', fieldnames=self.headers)
             for i, d in enumerate(csvs_to_add):
                 d[ROWNUM_KEY] = i
-                if d['group'] != None and d['group'] != '':
-                    d['group'] = int(d['group'])
-                    if d['group'] > 0:
-                        self.groups.add(d['group'])
-                else:
-                    d['group'] = None
-                if d['pid'] != None and d['pid'] != '':
-                    pid = int(d['pid'])
-                    d['pid'] = pid
-                    if d['group'] is None or d['group'] == '' or d['group'] < 1:
-                        self.pids[pid] = d
-                else:
-                    d['pid'] = None
-                self.rawdata.append(d)
+                self._add_task(d)
         if len(self.groups) < 1:
-            self.groups = [ 0 ]
+            self.groups = [0]
         else:
             self.groups = sorted(self.groups)
 
@@ -137,27 +126,42 @@ class QRunnerTasksDatabase:
     def __enter__(self):
         return self
 
-    def __init__(self, tasksdb_filename="tasks.csv", progress=None):
-        '''Read in the entire file and keep a copy of it.'''
-        tasksdb_filename = str(Path(tasksdb_filename).resolve())
-        self.tasksdb_filename = tasksdb_filename
-        self.tasksdb_filename_tmp = tasksdb_filename + "~"
-        try:
-            with open(self.tasksdb_filename, 'r') as tasksdb_f:
-                self.tasksdb_text = tasksdb_f.read()
-        except FileNotFoundError:
-            self.tasksdb_text = None
+    def __init__(self, tasksdb_filename="tasks.csv", progress=None, tasksdb_text=None):
+        self.tasksdb_text = None
         self.pids = {}
         self.first_group = 0
-        self.groups = set()
+        self.groups = [0]
         self.cur_group = 0
-        self.parse()
         self.progress=progress
+        self.tasksdb_filename = None
+        self.tasksdb_filename_tmp = None
+        if tasksdb_filename is not None and tasksdb_text is not None:
+            raise Exception('Cannot specify both tasksdb_filename and tasksdb_text.')
+        elif tasksdb_filename is not None:
+            '''Read in the entire file and keep a copy of it.'''
+            tasksdb_filename = str(Path(tasksdb_filename).resolve())
+            self.tasksdb_filename = tasksdb_filename
+            self.tasksdb_filename_tmp = tasksdb_filename + "~"
+            try:
+                with open(self.tasksdb_filename, 'r') as tasksdb_f:
+                    self.tasksdb_text = tasksdb_f.read()
+            except FileNotFoundError:
+                self.tasksdb_text = None
+        elif tasksdb_text is not None:
+            self.tasksdb_text = tasksdb_text
+        self.parse()
 
     def choose_group(self, group):
         self.cur_group = group
         # Needed to refresh the PID list to the new group
         self.tasks()
+
+    def get_num_tasks_by_group(self, group):
+        c = 0
+        for t in self.rawdata:
+            if t['group'] == group:
+                c += 1
+        return c
 
     def tasks(self):
         d = []
@@ -240,6 +244,8 @@ class QRunnerTasksDatabase:
             w = csv.DictWriter(f, dialect='unix', fieldnames=self.headers)
             nt = dict(t)
             del nt[ROWNUM_KEY]
+            if FUNCTION_KEY in nt:
+                del nt[FUNCTION_KEY]
             w.writerow(nt)
             self.progress(update_text=f.s, update_fields=t)
         if no_update is not True:
@@ -253,10 +259,17 @@ class QRunnerTasksDatabase:
         return list(self.pids.keys())
 
     def update(self):
+        if self.tasksdb_filename_tmp is None or self.tasksdb_filename is None:
+            return
+
         ld = []
         for d in self.rawdata:
             nd = dict(d)
             del nd[ROWNUM_KEY]
+            if FUNCTION_KEY in nd:
+                del nd[FUNCTION_KEY]
+            if 'function' in nd:
+                raise Exception('Cannot write a tasks CSV database file when some of the tasks are functions, not external commands.')
             ld.append(nd)
 
         with open(self.tasksdb_filename_tmp, 'w') as tasksdb_tmp_f:
@@ -266,6 +279,76 @@ class QRunnerTasksDatabase:
             w.writerows(ld)
 
         os.rename(self.tasksdb_filename_tmp, self.tasksdb_filename)
+
+    num_tasks = lambda self: self.rawdata_len
+
+    def add_task(self, **kwds):
+        '''add_task has the unique ability to take a lambda for the command argument'''
+        t = dict()
+        for k in self.headers:
+            t[k] = None
+        for k, v in kwds.items():
+            if k not in self.headers and k not in ['function']:
+                raise Exception("Unknown field `{}'".format(k))
+            t[k] = v
+        self._add_task(t)
+
+    def _add_task(self, t):
+        d = dict(t)
+        d[ROWNUM_KEY] = self.num_tasks()
+        if d['group'] != None and d['group'] != '':
+            d['group'] = int(d['group'])
+            if d['group'] > 0:
+                myset = set(self.groups)
+                myset.add(d['group'])
+                self.groups = myset
+        else:
+            d['group'] = None
+        if d['pid'] != None and d['pid'] != '':
+            pid = int(d['pid'])
+            d['pid'] = pid
+            if d['group'] is None or d['group'] == '' or d['group'] < 1:
+                self.pids[pid] = d
+        else:
+            d['pid'] = None
+        self.rawdata.append(d)
+        self.rawdata_len += 1
+
+    def delete_task(self, t):
+        '''This fails if the task being deleted is not the very last task.'''
+        if t[ROWNUM_KEY] != self.rawdata_len:
+            raise Exception('Only the most recently added task may be deleted')
+        tt = self.rawdata[-1]
+        ttt = dict(t)
+        del ttt[ROWNUM_KEY]
+        if ttt != tt:
+            raise Exception('Task objects are inconsistent')
+        del ttt
+        del t
+        self.rawdata.pop()
+        pid = tt['pid']
+        group = tt['group']
+        del tt
+        if pid is not None:
+            del self.pids[pid]
+        if group is not None and group > 0:
+            if self.get_num_tasks_by_group(group) == 0:
+                self.groups.remove(group)
+                if self.cur_group == group:
+                    self.cur_group = 0
+                if len(self.groups) < 1:
+                    self.first_group = 0
+                else:
+                    self.first_group = min(self.group)
+        self.rawdata_len -= 1
+
+    def delete_all_tasks(self):
+        self.pids = {}
+        self.first_group = 0
+        self.groups = [0]
+        self.cur_group = 0
+        self.rawdata = []
+        self.rawdata_len = 0
 
 def test():
     with QRunnerTasksDatabase() as tdb:

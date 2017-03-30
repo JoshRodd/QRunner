@@ -25,10 +25,13 @@ class QRunner:
     def _launch_task(self, t, comment='', status='INVALID', rownum=None, 
                              pid=None, rc=None, command=None, group=0, user=getpass.getuser(),
                              host=platform.node(), pwd=None, inputfile=None, outputfile=None,
-                             errorfile=None):
+                             errorfile=None, function=None):
 
-        if command == None:
+        if command == None and function == None:
             raise Exception("Cannot have a task with no command.")
+
+        if command is not None and function is not None:
+            raise Exception("Only a command or a function may be passed as a task, not both.")
 
         if host != platform.node():
             raise Exception("Executing tasks on a remote host is not yet supported. \
@@ -80,10 +83,29 @@ The current user is `{}'.".format(getpass.getuser()))
 
         t['status'] = 'LAUNCHING'
         self.tdb.set_task(t, no_update=True)
-        p = subprocess.Popen(shlex.split(command), stdin=inputf, stdout=outputf, stderr=errorf)
+        if command is not None:
+            p = subprocess.Popen(shlex.split(command), stdin=inputf, stdout=outputf, stderr=errorf)
+        elif function is not None:
+            pid = os.fork()
+            if pid > 0:
+                class FakePopen:
+                    def __init__(self, pid=None, returncode=None):
+                        self.pid = pid
+                        self.returncode = returncode
+                p = FakePopen(pid=pid)
+            else:
+#                if inputf != sys.stdin:
+#                    os.dup2(inputf, 0)
+#                if outputf != sys.stdout:
+#                    os.dup2(outputf, 1)
+#                if errorf != sys.stderr:
+#                    os.dup2(outputf, 2)
+                sys.exit(function())
+        else:
+            assert(False)
         t['pid'] = p.pid
-        t['status'] = 'RUNNING'
         self.popens[p.pid] = p
+        t['status'] = 'RUNNING'
         self.tdb.set_task(t, no_update=True)
         self.done_tasks += 0.5
 
@@ -93,7 +115,7 @@ The current user is `{}'.".format(getpass.getuser()))
     def launch_task(self, t):
         tt = {}
         for k, v in t.items():
-            if v is not None and k in self.tdb.headers and k != 'exception':
+            if v is not None and k in self.tdb.headers + ['function'] and k != 'exception':
                 tt[k] = t[k]
         self._launch_task(t, **tt)
 
@@ -113,7 +135,9 @@ The current user is `{}'.".format(getpass.getuser()))
                     self.died(self.tdb.task_by_pid(pid))
                 else:
                     # Check for tasks Popen got before our own os.wait().
-                    self.finished(pid, self.popens[pid].returncode)
+                    returncode = self.popens[pid].returncode
+                    if returncode is not None:
+                        self.finished(pid, returncode)
 
         for t in self.tdb.tasks_by_status('LAUNCHING'):
             t['status'] = 'FAILED'
@@ -206,8 +230,12 @@ The current user is `{}'.".format(getpass.getuser()))
             self.progress(percentage=self.calculate_percentage())
 
     def calculate_percentage(self):
-        grp_amt = 1 / self.num_groups
-        grps_done = self.done_groups / self.num_groups
+        if self.num_groups > 0:
+            grp_amt = 1 / self.num_groups
+            grps_done = self.done_groups / self.num_groups
+        else:
+            grp_amt = 1
+            grps_done = 0
         if self.num_tasks > 0:
             tasks_done = self.done_tasks / self.num_tasks
         else:
@@ -220,6 +248,7 @@ The current user is `{}'.".format(getpass.getuser()))
         groups = self.tdb.groups
         self.num_groups = len(groups)
         self.done_groups = 0
+        self.num_tasks = 0
         for g in groups:
             self.done_tasks = 0
             self.tdb.choose_group(g)
@@ -233,6 +262,9 @@ The current user is `{}'.".format(getpass.getuser()))
         self.call_progress()
         self.tdb.update()
 
+    def add_task(self, **kwds):
+        self.tdb.add_task(**kwds)
+
 def test():
     def print_dots(update_text=None, update_fields=None, percentage=None):
         shown_progress = True
@@ -241,12 +273,18 @@ def test():
         sys.stdout.flush()
     print("         Processing queue ...", end='')
     sys.stdout.flush()
-    with QRunner(progress=print_dots, max_tasks=256) as qr:
+    with QRunner(progress=print_dots, max_tasks=256, tasksdb_filename=None) as qr:
+        qr.add_task(comment="My_Task1", status="NEW", command="ping -c 1 -t 1 10.20.50.11", pwd="demo")
+        qr.add_task(comment="My_Task2", status="NEW", function=lambda: os.system(u'say -v Carmit שלום'), group=1, pwd="demo")
+        qr.add_task(comment="My_Task3", status="NEW", function=lambda: os.system(u'say -v Anna Hallo'), group=2, pwd="demo")
+        qr.add_task(comment="My_Task4", status="NEW", function=lambda: os.system(u'say -v Amelie Bonjour'), group=3, pwd="demo")
+        qr.add_task(comment="My_Task5", status="NEW", function=lambda: os.system(u'say -v Diego Hola'), group=4, pwd="demo")
         qr.run()
         if qr.done() is False:
             print()
             raise Exception("qr.done() returned False")
         print(" done.                     ")
+    print(qr.tdb.tasks())
 
 def main():
     test()

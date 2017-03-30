@@ -22,7 +22,7 @@ counter=0
 grp=1
 while read hosttest; do
 	counter=$(($counter + 1))
-	if [ $counter -gt 4 ]; then
+	if [ $counter -gt 510 ]; then
 		counter=1
 		grp=$(($grp + 1))
 	fi
